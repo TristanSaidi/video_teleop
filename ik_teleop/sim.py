@@ -49,7 +49,7 @@ class TeleOpSim (object):
             self.cfg = cfg
 
         # self.env = gym.make('AllegroManipulateBlockRotateZPalm-v0')
-        self.env = GymEnv('block-v0')
+        self.env = GymEnv('block-v3')
         initial_env = self.env.reset()
 
         #self.desired_angles = np.ones(16)*0.6
@@ -63,7 +63,8 @@ class TeleOpSim (object):
         # for cam in self.cfg.realsense.serial_numbers:
         self.pipeline, config = camera.create_realsense_pipeline(self.cfg.realsense.serial_numbers[3], self.cfg.realsense.resolution, self.cfg.realsense.fps)
         print(config)
-        self.pipeline.start(config)
+        self.pipeline.start()
+        # self.pipeline.start(config)
 
         # Creating mediapipe objects
         self.mediapipe_drawing = mediapipe.solutions.drawing_utils
@@ -222,24 +223,24 @@ class TeleOpSim (object):
 
 
             # Checking if the thumb is inside the bound
-            if cv2.pointPolygonTest(np.array(self.cfg.mediapipe_bounds.thumb), finger_tip_positions['thumb'], False) > -1:
+            # if cv2.pointPolygonTest(np.array(self.cfg.mediapipe_bounds.thumb), finger_tip_positions['thumb'], False) > -1:
                 # Getting the transformed thumb tip coordinate using projective transformation on the finger tip coordinate
-                transformed_thumb_coordinate = perform_persperctive_transformation(
-                    finger_tip_positions['thumb'], 
-                    self.cfg.mediapipe_bounds.thumb,
-                    self.cfg.allegro_bounds.thumb,
-                    self.cfg.allegro_bounds.height)
-                # import pdb
-                # pdb.set_trace()
-                print(transformed_thumb_coordinate)
-                # Finding the desired thumb angles and updating them on the ring finger angles using the bounded inverse kinematics finction
-                self.desired_angles = self.allegro_control.bounded_finger_motion(
-                    'thumb', 
-                    transformed_thumb_coordinate, 
-                    self.moving_average_queues['thumb'], 
-                    self.desired_angles)
-            else:
-                print('thumb not inside bounds!')
+            transformed_thumb_coordinate = perform_persperctive_transformation(
+                finger_tip_positions['thumb'], 
+                self.cfg.mediapipe_bounds.thumb,
+                self.cfg.allegro_bounds.thumb,
+                self.cfg.allegro_bounds.height)
+            # import pdb
+            # pdb.set_trace()
+            print(transformed_thumb_coordinate)
+            # Finding the desired thumb angles and updating them on the ring finger angles using the bounded inverse kinematics finction
+            self.desired_angles = self.allegro_control.bounded_finger_motion(
+                'thumb', 
+                transformed_thumb_coordinate, 
+                self.moving_average_queues['thumb'], 
+                self.desired_angles)
+            # else:
+            #     print('thumb not inside bounds!')
 
             return self.desired_angles
         return 
@@ -283,7 +284,7 @@ class TeleOpSim (object):
 
                 # If there is a mediapipe hand estimate
                 if estimate.multi_hand_landmarks is not None:  
-
+                    print("hand detected")
                     # Getting the hand coordinate values for the only detected hand
                     hand_landmarks = estimate.multi_hand_landmarks[0]
 
@@ -309,7 +310,7 @@ class TeleOpSim (object):
                             # Using the ROS publisher to publish the angles
                             # self.allegro_pub.pose_step(desired_angles)
 
-                        
+                            print("Desired angles: ", self.desired_angles)                        
                             joints = np.array(self.desired_angles) 
                             self.obs_ctr += 1      
                             self.current_joint_state =  np.array(self.desired_angles) 

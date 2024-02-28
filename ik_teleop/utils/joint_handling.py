@@ -96,6 +96,7 @@ def get_joint_positions(hand_landmarks, resolution, mediapipe_structure, flip = 
 
 def check_hand_position(wrist_position, pinky_knuckle_position, wrist_joint_bound, pinky_knuckle_bound):
     # Checking if the pinky knuckle inside the pinky knuckle contour
+    return True
     if cv2.pointPolygonTest(np.array(pinky_knuckle_bound), pinky_knuckle_position, False) > -1:
         # Checking if the wrist position is within the circular bound
              
