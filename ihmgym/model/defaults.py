@@ -9,7 +9,7 @@ DEFAULTS = {
     "kp_dist": 1,
     "gravity": np.array([0, 0, -9.81]),
     "impratio": 10,
-    "prox_joint_range": [-np.pi / 2, np.pi / 2],
-    "middle_joint_range": [-np.pi / 2, np.pi / 2],
-    "dist_joint_range": [-np.pi / 2, np.pi / 2],
+    "prox_joint_range": [-np.pi / 5, np.pi / 5],
+    "middle_joint_range": [-np.pi / 8, np.pi / 8],
+    "dist_joint_range": [-np.pi / 8, np.pi / 8],
 }

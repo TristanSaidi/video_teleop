@@ -135,14 +135,14 @@ class IHMEnv(gym.Env):
         return seeds
 
     def step(self, action_dict):
-        
+        """ expects cartesian coordinates of fingertips and desired pose of UR5 ee"""
         hand_action = action_dict["hand"]
         arm_action = action_dict["arm"]
-
         # parse hand action - expects cartesian coordinates of fingertips
-        assert hand_action.shape == (5, 3), "Cartesian action must be of shape (5, 3)"
-        dq_hand = self._compute_dq_cartesian(hand_action)
-        dq_arm = self._compute_arm_dq(arm_action)
+        assert hand_action.shape == (5, 3), "Cartesian action for hand must be of shape (5, 3)"
+        assert arm_action.shape == (4, 4), "Action for arm must be of shape (4, 4)"
+        dq_hand = self._compute_dq_cartesian_hand(hand_action)
+        dq_arm = self._compute_dq_cartesian_arm(arm_action)
 
         dq = np.concatenate((dq_hand, dq_arm))
         # parse arm action - expects joint positions
@@ -176,11 +176,16 @@ class IHMEnv(gym.Env):
             )
         return dq
 
-
-    def _compute_arm_dq(self, pos):
+    def _compute_dq_cartesian_arm(self, pose):
         """Compute joint setpoint delta (dq) for action"""
+        # obtain desired joint positions via ik
         current_joint_pos = self.sim.arm_joint_pos
-        desired_joint_pos = pos
+        
+        desired_pose = self.sim.check_ik_pos_arm(pose)
+        desired_joint_pos = self.sim.compute_ik_arm(desired_pose, current_joint_pos)
+
+        # desired_joint_pos = self._clamp_arm_action(desired_joint_pos)
+
         action = desired_joint_pos - current_joint_pos
         if not self._discrete_action:
             if self.action_scaling_type == 'clip':
@@ -194,11 +199,19 @@ class IHMEnv(gym.Env):
             dq = np.multiply(self.max_dq[0:len(action)], action)
         return dq * 0.5
 
-    def _compute_dq_cartesian(self, pos):
+    def _compute_dq_cartesian_hand(self, pos, offset=False):
         """Compute joint setpoint delta (dq) for action (treated as cartesian coords of end-effector)"""
         current_joint_pos = self.sim.hand_joint_pos
-        pos = self.sim.check_ik_pos(pos)
-        desired_joint_pos = self.sim.compute_ik(pos)
+        pos = self.sim.check_ik_pos_hand(pos)
+        desired_joint_pos = self.sim.compute_ik_hand(pos, roll=False)
+        
+        if offset:
+            # add offset for middle and proximal joints
+            offset = np.zeros(15)
+            for i in range(5):
+                offset[i*3+1] = -0.3
+                offset[i*3+2] = -0.3
+            desired_joint_pos += offset
 
         action = desired_joint_pos - current_joint_pos
         if not self._discrete_action:

@@ -12,6 +12,8 @@ from .sim import Sim, State
 from .tactile_sensor import TactileSensor
 from .trajplanner import TrajPlanner
 
+from ikpy import chain
+
 logger = getlogger(__name__)
 
 __all__ = ["Hand"]
@@ -35,10 +37,12 @@ class Hand(Sim):
         self,
         *,
         model: Union[str, bytes] = None,
+        ur5_kinematics: chain.Chain,
         state: State = None,
         default_hand_joint_pos: Optional[np.ndarray] = None,
         default_arm_joint_pos: Optional[np.ndarray] = None,
         default_object_pose: Optional[np.ndarray] = None,
+        table_height: float = 0.1,
         simulation_settling_time: float = 1,
         trajplanner_params: dict = {
             "frequency": 250,
@@ -80,6 +84,8 @@ class Hand(Sim):
         self._default_state = None
         self._default_state = pickle.loads(pickle.dumps(self.reset()))
 
+        self.table_height = table_height
+
         # Trajplanner
         self._trajplanner_params = trajplanner_params
         self._setup_trajplanners(trajplanner_params)
@@ -94,6 +100,8 @@ class Hand(Sim):
         for name in ["hand_joint_pos"]:
             self._np_random[name] = np.random.default_rng()
         self._hand_joint_position_noise = hand_joint_position_noise
+
+        self.ur5_kinematics = ur5_kinematics
         
     def reset(self) -> Dict:
         """Reset to state with default hand joint pos and object pose"""
@@ -596,51 +604,97 @@ class Hand(Sim):
             self._trajplanners[i].set_setpoint(joint_ctrl[i])
         self._trajplanner_active = True
 
-    def compute_ik(self, action, roll=False):
+    def compute_ik_hand(self, action, roll=False):
         """ computes ik for the hand """
         # get link lengths
         link_lengths = self._link_lengths
         l_1, l_2, l_3 = link_lengths["finger1"]
         x_e, y_e, z_e = action[:, 0], action[:, 1], action[:, 2]
+        neg_indices = np.where(y_e < 0)[0]
+        neg = np.zeros_like(y_e)
+        neg[neg_indices] = -1
+
 
         l_prime = np.sqrt(x_e**2 + y_e**2 + (z_e - l_1)**2)
-        beta = np.arctan2(z_e - l_1, np.sqrt(x_e**2 + y_e**2))
+        beta = np.arctan2(z_e - l_1, neg * neg * np.sqrt(x_e**2 + y_e**2))
         alpha = np.arccos((l_2**2 + l_prime**2 - l_3**2)/(2*l_2*l_prime))
-        
+
         a = l_prime * np.sin(alpha)
 
         theta2 = np.pi/2 - beta - alpha
         theta3 = np.arcsin(a/l_3)
 
-        theta1 = np.arctan2(x_e, y_e) if roll else np.zeros_like(theta2)
+        theta1 = np.arctan2(y_e, x_e) if roll else np.zeros_like(theta2)
 
         action = np.array([theta1, theta2, theta3]).T
         # collapse the from 5x3 to 15
         action = action.flatten()
         return action
 
-    def check_ik_pos(self, pos):
+    def compute_ik_arm(self, desired_ee_pose, current_arm_joint_pos):
+        """ computes ik for the arm """
+        padded_arm_joint_pos = np.pad(current_arm_joint_pos, (1, 1), 'constant', constant_values=(0, 0))                            
+        arm_action = self.ur5_kinematics.inverse_kinematics_frame(desired_ee_pose, padded_arm_joint_pos, orientation_mode='all')
+        masked_arm_action = arm_action[self.ur5_kinematics.active_links_mask]
+        return masked_arm_action
+
+    def check_ik_pos_hand(self, pos):
         """ checks if the position is within the workspace of the hand """
         link_lengths = self._link_lengths
         l_1, l_2, l_3 = link_lengths["finger1"]
         x_e, y_e, z_e = pos[:, 0], pos[:, 1], pos[:, 2]
 
-        # clamp y from below to make it positive
-        y_e = np.clip(y_e, 0, None)
         # clamp z from below to make it >= l_1
         z_e = np.clip(z_e, l_1, None)
 
         pos = np.array([x_e, y_e, z_e]).T
-        valid = np.all(x_e**2 + y_e**2 + (z_e - l_1)**2 < (l_2 + l_3)**2)
+        valid = np.all(x_e**2 + y_e**2 + (z_e - l_1)**2 < (l_2 + l_3)**2)         
 
+        # if not valid, project the point to the workspace
         if not valid:
-            centered_pos = pos - np.array([0, 0, l_1])
-            norm_centered_pos = np.linalg.norm(centered_pos, axis=1)
-            scale = 0.99 * (l_2 + l_3)/norm_centered_pos
-            pos = centered_pos*scale[:, None] + np.array([0, 0, l_1])
-            x_e, y_e, z_e = pos[:, 0], pos[:, 1], pos[:, 2]
-            assert np.all(x_e**2 + y_e**2 + (z_e - l_1)**2 < (l_2 + l_3)**2)
+            invalid_fingers = np.where(x_e**2 + y_e**2 + (z_e - l_1)**2 >= (l_2 + l_3)**2)[0]
+            for i in invalid_fingers:
+                centered_pos_i = pos[i] - np.array([0, 0, l_1])
+                norm_centered_pos_i = np.linalg.norm(centered_pos_i)
+                scale_i = 0.99 * (l_2 + l_3)/norm_centered_pos_i
+                pos[i] = centered_pos_i*scale_i + np.array([0, 0, l_1])
+                x_e, y_e, z_e = pos[i, 0], pos[i, 1], pos[i, 2]
+                assert x_e**2 + y_e**2 + (z_e - l_1)**2 < (l_2 + l_3)**2
+
+        x_e, y_e, z_e = pos[:, 0], pos[:, 1], pos[:, 2]
+        assert np.all(x_e**2 + y_e**2 + (z_e - l_1)**2 < (l_2 + l_3)**2)
+
+
+        l_prime = np.sqrt(x_e**2 + y_e**2 + (z_e - l_1)**2)   
+        cos_alpha = (l_2**2 + l_prime**2 - l_3**2)/(2*l_2*l_prime)
+        valid = np.all(cos_alpha >= -1) and np.all(cos_alpha <= 1)
+
+        # typically caused by finger covering its own base --> y coord set to about 0
+        if not valid:
+            print("Invalid cos_alpha")
+            invalid_fingers = np.where(np.logical_or(cos_alpha < -1, cos_alpha > 1))[0]
+            for i in invalid_fingers:
+                pos[i, 1] = np.sqrt(l_2**2 + l_3**2 - (pos[i,2]-l_1)**2)
+                
         return pos
+
+    def check_ik_pos_arm(self, pose):
+        """Clamp ur5 ee position to avoid collision with table"""
+        # run fk to get ee position
+        ee_pos = pose[:3, 3]
+        # table height
+        half_table_height = self.table_height/2
+        # link lengths
+        link_lengths = self.get_link_lengths('finger1')
+        l1, l2, l3 = link_lengths
+        plate_depth = 0.0
+        finger_reach = l1 + l2 + l3 + plate_depth
+        # wrist workspace
+        if ee_pos[2] - finger_reach < half_table_height:
+            print(f"Clamping ee position from {ee_pos[2]} to {half_table_height + finger_reach}")
+            ee_pos[2] = half_table_height + l1 + l2 + l3
+            pose[:3, 3] = ee_pos
+        return pose
 
     # Contacts
     def _setup_tactile_sensor(self, tactile_sensor_params):

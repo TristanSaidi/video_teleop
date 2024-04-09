@@ -12,6 +12,7 @@ from model.model3d5fh import Model3D5FH
 from model.model3d5fh_ur5e import Model3D5FH_UR5_PG
 
 from sim.hand import Hand
+from finger_frames.finger_frames import *
 
 import ikfastpy
 
@@ -43,6 +44,7 @@ import tf
 # Debugging imports
 from IPython import embed
 from ikpy import chain
+
 class TeleOpSim(object):
     def __init__(self, record_demo, hide_window, cfg = None, rotation_angle = 0, enable_moving_average = True, cache_file = None, calibration_duration = 100):
         self.record_demo = record_demo
@@ -55,12 +57,16 @@ class TeleOpSim(object):
         else:
             self.cfg = cfg
 
-
-        # self.robot = URDF.get_ur5(IHM_ROOT)
-        # self.kinematics = Kinematics(self.robot)
-        # self.controller = CartesianController(self.robot, self.kinematics)
-
-        model_xml = Model3D5FH_UR5_PG.toxml(object="cube")
+        self.table_height = 0.1
+        Kp = 5
+        kp_prox, kp_middle, kp_dist = np.array([Kp]*5), np.array([Kp]*5), np.array([Kp]*5)
+        model_xml = Model3D5FH_UR5_PG.toxml(
+            object="cube", 
+            table_height=self.table_height,
+            kp_prox=kp_prox,
+            kp_middle=kp_middle,
+            kp_dist=kp_dist
+        )
         self.ee_chain = chain.Chain.from_urdf_file(IHM_ROOT + "/model/urdf/ur5e.xml")
         # set first and last active links mask to False
         self.ee_chain.active_links_mask[0] = False # base_link
@@ -71,20 +77,19 @@ class TeleOpSim(object):
 
         # print forward kinematics of default arm joint pos
         ee_pose = self.ee_chain.forward_kinematics(np.pad(self.default_arm_joint_pos, (1, 1), 'constant', constant_values=(0, 0)))
-        print(f'ee pose: {ee_pose}')
 
-        self.default_object_pose = np.array([0.5, 0.0, 0.25, 1.0, 0.0, 0.0, 0.0])
-
+        self.default_object_pose = np.array([0.5, -0.3, 0.25, 1.0, 0.0, 0.0, 0.0])
         
         # Ur5 mapping params
         # self.arm_workspace_center = np.array([0.10914794, -0.48689917, 0.43185934])
         self.arm_workspace_center = np.array([0.0, -0.5, 0.40])
 
-        self.arm_workspace_width = np.array([0.25, 0.15, 0.15])
+        self.arm_workspace_width = np.array([0.5, 0.15, 0.15])
 
 
         self.sim = Hand(
             model=model_xml,
+            ur5_kinematics=self.ee_chain,
             default_hand_joint_pos=self.default_hand_joint_pos,
             default_arm_joint_pos=self.default_arm_joint_pos,
             default_object_pose=self.default_object_pose,
@@ -98,6 +103,8 @@ class TeleOpSim(object):
         )
         
         self.viewer = self.env.sim._get_viewer("human")
+        self.viewer.cam.azimuth = 45
+        self.viewer.cam.elevation = -22.5
         initial_env = self.env.reset()
         
         # Creating a realsense pipeline
@@ -110,7 +117,6 @@ class TeleOpSim(object):
         self.write_cache = cache_file is not None and not os.path.exists(os.path.join('cache', cache_file))
         if cache_file is not None:
             string = f"Loading from {os.path.join('cache', cache_file)}" if self.load_cache else f"Writing to {os.path.join('cache', cache_file)}"
-            print(string)
         self.cache_file = cache_file
         # perform calibration if we are writing to cache or if we are not loading from cache
         self.calibrate = self.write_cache or self.cache_file is None
@@ -232,7 +238,6 @@ class TeleOpSim(object):
 
             # for calibration
             fingertip_pos_history = [] 
-            wrist_pos_history = []
             finger_empirical_ranges = None
             
             # if we are loading from cache, load the empirical ranges
@@ -282,14 +287,6 @@ class TeleOpSim(object):
                 # Converting the image back from RGB to BGR
                 image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
                 raw_im = copy(image)
-                # Create all the bounds in the image
-                image = camera.create_contours(
-                    image, 
-                    self.cfg.mediapipe.contours.wrist_circle, 
-                    self.cfg.mediapipe.contours.pinky_knuckle_bounds, 
-                    self.cfg.mediapipe.contours.thumb_tip_bounds,
-                    self.cfg.mediapipe.contours.thickness
-                )
 
                 # If there is a mediapipe hand estimate
                 if estimate.multi_hand_landmarks is not None:  
@@ -305,48 +302,39 @@ class TeleOpSim(object):
                         wrist_xy, thumb_xy, index_xy, middle_xy, ring_xy, pinky_xy, finger_tip_positions = joint_handlers.get_joint_positions(hand_landmarks, self.cfg.realsense.resolution, self.cfg.mediapipe)
                         # get z pos from depth
 
-                        ## TODO: turn this into a function with edge checking
-                        wrist_pos_z = depth[wrist_xy[1], wrist_xy[0]]
-                        thumb_pos_z = depth[thumb_xy[1], thumb_xy[0]]
-                        index_pos_z = depth[index_xy[1], index_xy[0]]
-                        middle_pos_z = depth[middle_xy[1], middle_xy[0]]
-                        ring_pos_z = depth[ring_xy[1], ring_xy[0]]
-                        pinky_pos_z = depth[pinky_xy[1], pinky_xy[0]]
-                        thumb_tip_pos_z = depth[finger_tip_positions['thumb'][1], finger_tip_positions['thumb'][0]]
-                        index_tip_pos_z = depth[finger_tip_positions['index'][1], finger_tip_positions['index'][0]]
-                        middle_tip_pos_z = depth[finger_tip_positions['middle'][1], finger_tip_positions['middle'][0]]
-                        ring_tip_pos_z = depth[finger_tip_positions['ring'][1], finger_tip_positions['ring'][0]]
-                        pinky_tip_pos_z = depth[finger_tip_positions['pinky'][1], finger_tip_positions['pinky'][0]]
+                        xy_pos_dict = {
+                            'wrist': wrist_xy,
+                            'thumb': thumb_xy,
+                            'index': index_xy,
+                            'middle': middle_xy,
+                            'ring': ring_xy,
+                            'pinky': pinky_xy,
+                            'finger_tip_positions': finger_tip_positions
+                        }
 
-                        # get xyz
-                        wrist_position = [wrist_xy[0], wrist_xy[1], wrist_pos_z]
-                        thumb_knuckle_position = [thumb_xy[0], thumb_xy[1], thumb_pos_z]
-                        index_knuckle_position = [index_xy[0], index_xy[1], index_pos_z]
-                        middle_knuckle_position = [middle_xy[0], middle_xy[1], middle_pos_z]
-                        ring_knuckle_position = [ring_xy[0], ring_xy[1], ring_pos_z]
-                        pinky_knuckle_position = [pinky_xy[0], pinky_xy[1], pinky_pos_z]
-                        thumb_tip_position = [finger_tip_positions['thumb'][0], finger_tip_positions['thumb'][1], thumb_tip_pos_z]
-                        index_tip_position = [finger_tip_positions['index'][0], finger_tip_positions['index'][1], index_tip_pos_z]
-                        middle_tip_position = [finger_tip_positions['middle'][0], finger_tip_positions['middle'][1], middle_tip_pos_z]
-                        ring_tip_position = [finger_tip_positions['ring'][0], finger_tip_positions['ring'][1], ring_tip_pos_z]
-                        pinky_tip_position = [finger_tip_positions['pinky'][0], finger_tip_positions['pinky'][1], pinky_tip_pos_z]
+                        xyz_pos_dict = joint_handlers.compute_hand_landmarks_xyz(
+                            xy_pos_dict,
+                            depth,
+                            self.cfg.realsense.resolution
+                        )
 
                         finger_tip_positions = {
-                            'thumb': thumb_tip_position,
-                            'index': index_tip_position,
-                            'middle': middle_tip_position,
-                            'ring': ring_tip_position,
-                            'pinky': pinky_tip_position
+                            'thumb': xyz_pos_dict['thumb_tip'],
+                            'index': xyz_pos_dict['index_tip'],
+                            'middle': xyz_pos_dict['middle_tip'],
+                            'ring': xyz_pos_dict['ring_tip'],
+                            'pinky': xyz_pos_dict['pinky_tip']
                         }
 
                         finger_base_positions = {
-                            'thumb': thumb_knuckle_position,
-                            'index': index_knuckle_position,
-                            'middle': middle_knuckle_position,
-                            'ring': ring_knuckle_position,
-                            'pinky': pinky_knuckle_position
+                            'thumb': xyz_pos_dict['thumb'],
+                            'index': xyz_pos_dict['index'],
+                            'middle': xyz_pos_dict['middle'],
+                            'ring': xyz_pos_dict['ring'],
+                            'pinky': xyz_pos_dict['pinky']
                         }
 
+                        wrist_position = xyz_pos_dict['wrist']
                         hand_state_dict = {
                             "wrist": wrist_position,
                             "fingertips": finger_tip_positions,
@@ -354,26 +342,21 @@ class TeleOpSim(object):
                         }
 
                         # get the z axis of the fingers (vector from palm to finger base)
-                        finger_frames = self.compute_finger_frames_palm_down(hand_state_dict)
+                        finger_frames = compute_finger_frames_palm_up(hand_state_dict)
                         
                         # get the finger tip positions in the finger frames
-                        finger_tip_positions_finger_frame = self.get_ftip_pos_finger_frame(finger_frames, finger_tip_positions, finger_base_positions)
+                        finger_tip_positions_finger_frame = get_ftip_pos_finger_frame(finger_frames, finger_tip_positions, finger_base_positions)
 
                         # collect data for calibration
                         if self.timestep < self.calibration_duration and self.calibrate:
                             # turn into a [5, 3] array
                             finger_tip_positions_finger_frame = np.array([finger_tip_positions_finger_frame[finger] for finger in ['thumb', 'index', 'middle', 'ring', 'pinky']])
                             fingertip_pos_history.append(finger_tip_positions_finger_frame)
-                            wrist_pos_history.append(wrist_position)
                             print(f'calibrating... {self.timestep}/{self.calibration_duration}')
 
                         # compute empirical ranges at the end of calibration (with filtering)
                         elif self.timestep == self.calibration_duration and self.calibrate:
-                            fingertip_pos_history = np.array(fingertip_pos_history)
-                            
-                            wrist_pos_history = np.array(wrist_pos_history).astype(float)
-                            filtered_wrist_pos_history = scipy.signal.medfilt(wrist_pos_history, (5, 1))
-                            
+                            fingertip_pos_history = np.array(fingertip_pos_history)                            
                             # median filter along the first (time) axis to remove outliers
                             filtered_fingertip_pos_history = scipy.signal.medfilt(fingertip_pos_history, (5, 1, 1))
 
@@ -384,24 +367,32 @@ class TeleOpSim(object):
                                 finger_min = np.min(filtered_fingertip_pos_history[:, i, :], axis=0)
                                 finger_range = [(min, max) for min, max in zip(finger_min, finger_max)]
                                 finger_empirical_ranges[finger] = finger_range
-                            wrist_max = np.max(filtered_wrist_pos_history, axis=0)
-                            wrist_min = np.min(filtered_wrist_pos_history, axis=0)
-                            wrist_range = [(min, max) for min, max in zip(wrist_min, wrist_max)]
-                            finger_empirical_ranges['wrist'] = wrist_range
                             if self.write_cache:
                                 with open(os.path.join('cache', self.cache_file), 'wb') as f:
                                     pickle.dump(finger_empirical_ranges, f)
                         else:
-
-                            action, wrist_position = self.compute_scaled_action(
-                                finger_tip_positions_finger_frame, 
-                                wrist_position, 
-                                finger_empirical_ranges, 
-                                l1, 
-                                l2, 
-                                l3, 
-                                self.arm_workspace_center, 
-                                self.arm_workspace_width
+                            normalized_ftip_positions = []
+                            for finger in ['thumb', 'index', 'middle', 'ring', 'pinky']:
+                                normalized_pos = compute_normalized_position(finger_tip_positions_finger_frame[finger], finger_empirical_ranges[finger])
+                                normalized_ftip_positions.append(normalized_pos)
+                            normalized_ftip_positions = np.array(normalized_ftip_positions)
+                            normalized_wrist_position = compute_normalized_position(wrist_position, dict(self.cfg.wrist_bounds))
+                            # compute action
+                            action = np.zeros((5, 3))
+                            workspace_center = [0.0, 0.0, l1 + (l2 + l3)/2] # y goes from 0 to l2+l3
+                            workspace_width = [l2+l3, (l2+l3)/2, (l2+l3)/2]
+                            
+                            for i in range(5):
+                                norm_ftip_i = normalized_ftip_positions[i, :]
+                                action[i, :] = np.array(compute_action(norm_ftip_i, workspace_center, workspace_width))
+                            
+                            wrist_position = np.array(
+                                compute_action(
+                                    normalized_wrist_position, 
+                                    self.arm_workspace_center, 
+                                    self.arm_workspace_width,
+                                    invert_mask = [False, False, True] # invert x and z axes
+                                )
                             )
                             ee_rot = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, -1.0], [-1.0, 0.0, 0.0]]) # constant wrist orientation for now
 
@@ -412,34 +403,13 @@ class TeleOpSim(object):
                             desired_ee_pose[:3, 3] = wrist_position
                             desired_ee_pose[:3, :3] = ee_rot
 
-                            # inverse kinematics
-                            current_arm_joint_pos = self.sim.arm_joint_pos.copy()
-                            padded_arm_joint_pos = np.pad(current_arm_joint_pos, (1, 1), 'constant', constant_values=(0, 0))                            
-
-                            arm_action = self.ee_chain.inverse_kinematics_frame(desired_ee_pose, padded_arm_joint_pos, orientation_mode='all')
-                            masked_arm_action = arm_action[self.ee_chain.active_links_mask]
-
-
-                            # cycle consistency - forward kinematics
-                            ee_pose = self.ee_chain.forward_kinematics(arm_action)
-                            ee_pos = ee_pose[:3, 3]
-
-                            # if inconsistent, use previous action
-                            wrist_displacement = np.linalg.norm(wrist_position - ee_pos)
-                            if wrist_displacement > 1e-9:
-                                print(f'cycle consistency error: {wrist_displacement}')
-                                masked_arm_action = prev_action_dict["arm"]
-
                             # step
                             action_dict = {
                                 "hand": action,
-                                "arm": masked_arm_action
+                                "arm": desired_ee_pose
                             }
                             # fetch current ur5 joint angles
                             obs, _, done, info = self.env.step(action_dict)
-
-                            # save previous action
-                            prev_action_dict = action_dict
                             
                         self.timestep += 1
 
@@ -458,172 +428,6 @@ class TeleOpSim(object):
                 # Condition to break the loop incase of keyboard interrupt
                 if cv2.waitKey(30) & 0xFF == 27:
                     break
-
-
-    def compute_scaled_action(self, finger_tip_positions_finger_frame, wrist_position, finger_empirical_ranges, l1, l2, l3, wrist_worspace_center, wrist_workspace_width):
-        # scale the finger tip position based on the empirical range
-        # final end effector position (action) should be in the hemispherical workspace of the finger
-        ftip_pos_array = []
-        for finger in finger_tip_positions_finger_frame.keys():
-            ftip_position = finger_tip_positions_finger_frame[finger]
-            # scale the finger tip position based on the empirical range
-            empirical_ranges = finger_empirical_ranges[finger]
-            empirical_range_x, empirical_range_y, empirical_range_z = empirical_ranges
-            # x
-            mean = (empirical_range_x[0] + empirical_range_x[1]) / 2
-            width = (empirical_range_x[1] - empirical_range_x[0]) / 2
-            x = (ftip_position[0] - mean) * (l2 + l3) / width
-            # y
-            mean = (empirical_range_y[0] + empirical_range_y[1]) / 2
-            width = (empirical_range_y[1] - empirical_range_y[0]) / 2
-            y = (ftip_position[1] - mean) * (l2 + l3) / width
-            # z
-            mean = (empirical_range_z[0] + empirical_range_z[1]) / 2
-            width = (empirical_range_z[1] - empirical_range_z[0]) / 2
-            z = ((ftip_position[2] - mean) * (l2 + l3) / width) + l1
-            ftip_pos_array.append([x, y, z])
-        # wrist position
-        empirical_ranges = finger_empirical_ranges['wrist']
-        empirical_range_x, empirical_range_y, empirical_range_z = empirical_ranges
-        # x
-        mean = (empirical_range_x[0] + empirical_range_x[1]) / 2
-        width = (empirical_range_x[1] - empirical_range_x[0]) / 2
-        # min wrist x position should map to highest x value
-        x = (wrist_position[0] - mean) * -1 * wrist_workspace_width[0] / width + wrist_worspace_center[0]
-        # y
-        mean = (empirical_range_y[0] + empirical_range_y[1]) / 2
-        width = (empirical_range_y[1] - empirical_range_y[0]) / 2
-        y = (wrist_position[1] - mean) * wrist_workspace_width[1] / width + wrist_worspace_center[1]
-        # z
-        mean = (empirical_range_z[0] + empirical_range_z[1]) / 2
-        width = (empirical_range_z[1] - empirical_range_z[0]) / 2
-
-        # min wrist z position should map to highest z value
-        z = (wrist_position[2] - mean) * -1 * wrist_workspace_width[2] / width + wrist_worspace_center[2]
-        
-        ftip_pos_array = np.array(ftip_pos_array)
-        wrist_pos = np.array([x, y, z])
-        # project the end effector position onto the hemispherical workspace of the finger
-        ftip_pos_array = self.env.sim.check_ik_pos(ftip_pos_array)
-        return ftip_pos_array, wrist_pos
-
-    def compute_finger_frames_palm_up(self, hand_state_dict):
-        # computes the normalized frame the fingers 
-        # (z = vector from palm to finger base)
-        wrist_position = hand_state_dict['wrist']
-        finger_base_positions = hand_state_dict['finger_bases']
-        finger_z_axes = {
-            'thumb': np.array(finger_base_positions['thumb']) - np.array(wrist_position),
-            'index': np.array(finger_base_positions['index']) - np.array(wrist_position),
-            'middle': np.array(finger_base_positions['middle']) - np.array(wrist_position),
-            'ring': np.array(finger_base_positions['ring']) - np.array(wrist_position),
-            'pinky': np.array(finger_base_positions['pinky']) - np.array(wrist_position)
-        }
-        # normalize
-        for finger in finger_z_axes:
-            finger_z_axes[finger] = finger_z_axes[finger] / np.linalg.norm(finger_z_axes[finger])
-
-        # compute y axis by taking the cross product of the z of consecutive fingers
-        finger_y_axes = {
-            'thumb': np.cross(finger_z_axes['index'], finger_z_axes['thumb']),
-            'index': np.cross(finger_z_axes['middle'], finger_z_axes['index']),
-            'middle': np.cross(finger_z_axes['ring'], finger_z_axes['middle']),
-            'ring': np.cross(finger_z_axes['pinky'], finger_z_axes['ring']),
-            'pinky': np.cross(finger_z_axes['pinky'], finger_z_axes['ring'])
-        }
-        # normalize
-        for finger in finger_y_axes:
-            finger_y_axes[finger] = finger_y_axes[finger] / np.linalg.norm(finger_y_axes[finger])
-        
-        # compute x axis by taking the cross product of the y axis and the z axis
-        finger_x_axes = {
-            'thumb': np.cross(finger_y_axes['thumb'], finger_z_axes['thumb']),
-            'index': np.cross(finger_y_axes['index'], finger_z_axes['index']),
-            'middle': np.cross(finger_y_axes['middle'], finger_z_axes['middle']),
-            'ring': np.cross(finger_y_axes['ring'], finger_z_axes['ring']),
-            'pinky': np.cross(finger_y_axes['pinky'], finger_z_axes['pinky'])
-        }
-        # normalize
-        for finger in finger_x_axes:
-            finger_x_axes[finger] = finger_x_axes[finger] / np.linalg.norm(finger_x_axes[finger])
-
-        # construct transforms
-        finger_frames = {
-            'thumb': np.array([finger_x_axes['thumb'], finger_y_axes['thumb'], finger_z_axes['thumb']]),
-            'index': np.array([finger_x_axes['index'], finger_y_axes['index'], finger_z_axes['index']]),
-            'middle': np.array([finger_x_axes['middle'], finger_y_axes['middle'], finger_z_axes['middle']]),
-            'ring': np.array([finger_x_axes['ring'], finger_y_axes['ring'], finger_z_axes['ring']]),
-            'pinky': np.array([finger_x_axes['pinky'], finger_y_axes['pinky'], finger_z_axes['pinky']])
-        }
-
-        return finger_frames
-    
-
-    def compute_finger_frames_palm_down(self, hand_state_dict):
-        # computes the normalized frame the fingers 
-        # (z = vector from palm to finger base)
-        wrist_position = hand_state_dict['wrist']
-        finger_base_positions = hand_state_dict['finger_bases']
-        finger_z_axes = {
-            'thumb': np.array(finger_base_positions['thumb']) - np.array(wrist_position),
-            'index': np.array(finger_base_positions['index']) - np.array(wrist_position),
-            'middle': np.array(finger_base_positions['middle']) - np.array(wrist_position),
-            'ring': np.array(finger_base_positions['ring']) - np.array(wrist_position),
-            'pinky': np.array(finger_base_positions['pinky']) - np.array(wrist_position)
-        }
-        # normalize
-        for finger in finger_z_axes:
-            finger_z_axes[finger] = finger_z_axes[finger] / np.linalg.norm(finger_z_axes[finger])
-
-        # compute y axis by taking the cross product of the z of consecutive fingers
-        finger_y_axes = {
-            'thumb': np.cross(finger_z_axes['thumb'], finger_z_axes['index']),
-            'index': np.cross(finger_z_axes['index'], finger_z_axes['middle']),
-            'middle': np.cross(finger_z_axes['middle'], finger_z_axes['ring']),
-            'ring': np.cross(finger_z_axes['ring'], finger_z_axes['pinky']),
-            'pinky': np.cross(finger_z_axes['ring'], finger_z_axes['pinky'])
-        }
-        # normalize
-        for finger in finger_y_axes:
-            finger_y_axes[finger] = finger_y_axes[finger] / np.linalg.norm(finger_y_axes[finger])
-        
-        # compute x axis by taking the cross product of the y axis and the z axis
-        finger_x_axes = {
-            'thumb': np.cross(finger_y_axes['thumb'], finger_z_axes['thumb']),
-            'index': np.cross(finger_y_axes['index'], finger_z_axes['index']),
-            'middle': np.cross(finger_y_axes['middle'], finger_z_axes['middle']),
-            'ring': np.cross(finger_y_axes['ring'], finger_z_axes['ring']),
-            'pinky': np.cross(finger_y_axes['pinky'], finger_z_axes['pinky'])
-        }
-        # normalize
-        for finger in finger_x_axes:
-            finger_x_axes[finger] = finger_x_axes[finger] / np.linalg.norm(finger_x_axes[finger])
-
-        # construct transforms
-        finger_frames = {
-            'thumb': np.array([finger_x_axes['thumb'], finger_y_axes['thumb'], finger_z_axes['thumb']]),
-            'index': np.array([finger_x_axes['index'], finger_y_axes['index'], finger_z_axes['index']]),
-            'middle': np.array([finger_x_axes['middle'], finger_y_axes['middle'], finger_z_axes['middle']]),
-            'ring': np.array([finger_x_axes['ring'], finger_y_axes['ring'], finger_z_axes['ring']]),
-            'pinky': np.array([finger_x_axes['pinky'], finger_y_axes['pinky'], finger_z_axes['pinky']])
-        }
-
-        return finger_frames
-
-
-    def get_ftip_pos_finger_frame(self, finger_frames, finger_tip_positions, finger_base_positions):
-        # get the finger tip positions in the finger frames
-        assert finger_frames.keys() == finger_tip_positions.keys() == finger_base_positions.keys()
-        keys = finger_frames.keys()
-        # compute ftip-base vectors
-        ftip_base_vectors = {}
-        for finger in keys:
-            ftip_base_vectors[finger] = np.array(finger_tip_positions[finger]) - np.array(finger_base_positions[finger])
-        # project ftip-base vectors onto finger frames
-        ftip_pos_finger_frame = {}
-        for finger in keys:
-            ftip_pos_finger_frame[finger] = finger_frames[finger] @ ftip_base_vectors[finger]
-        return ftip_pos_finger_frame
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Use teleop to operate Mujoco sim')

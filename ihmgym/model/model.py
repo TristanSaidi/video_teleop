@@ -73,7 +73,8 @@ class Model(abc.ABC):
             object_format_map = cls._object_format_map(**params)
             object_model = cls._object_model.format_map(object_format_map)
 
-        
+        table_height = params.get("table_height", 0.1)
+        table_model = cls._table.format_map({"table_height": table_height})
 
         # Joint reference
         if "joint_ref" in params.keys():
@@ -113,7 +114,7 @@ class Model(abc.ABC):
             header=header,
             hand=hand_model,
             object=object_model,
-            table=cls._table,
+            table=table_model,
         )
         xml = cls._root.format_map(root_format_map)
 
@@ -163,13 +164,14 @@ class Model(abc.ABC):
     )
 
 
-    _table = """
+    _table = SafeFString("""
         <worldbody>
             <body name="table" pos="0.5 0.0 0.0">
-                <geom pos="0 0 0" rgba="0.1 1.0 0.1 1" size="0.4 0.75 0.1" type="box" />
+                <geom pos="0 0 0" rgba="0.1 1.0 0.1 1" size="0.4 0.75 {table_height}" type="box" />
             </body>
         </worldbody>
         """
+    )
 
     _dof_type = {
         "1_dof":
@@ -251,7 +253,7 @@ class Model(abc.ABC):
             else:
                 object_format_map["object_size"] = [object_size for i in range(3)]
         else:
-            object_format_map["object_size"] = [1 for i in range(3)]
+            object_format_map["object_size"] = [1.5 for i in range(3)]
 
         # Set object mass
         if "object_mass" in params.keys():
