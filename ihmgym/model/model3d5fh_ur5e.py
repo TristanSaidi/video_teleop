@@ -95,7 +95,7 @@ class Model3D5FH_UR5_PG(Model):
                     </default>
                 </default>
                 <default class="size1">
-                    <general gainprm="50" biasprm="0 -50 -10" forcerange="-28 28"/>
+                    <general gainprm="100" biasprm="0 -100 -20" forcerange="-28 28"/>
                 </default>
                 <default class="visual">
                     <geom type="mesh" contype="0" conaffinity="0" group="2"/>

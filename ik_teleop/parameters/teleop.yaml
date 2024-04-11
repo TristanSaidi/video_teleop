@@ -47,13 +47,13 @@ allegro_bounds:
 ##############################
 wrist_bounds:
   x:
-    - 350.0
     - 25.0
+    - 450.0
   y:
     - 191.0
     - 361.0
   z:
-    - 200.0
+    - 100.0
     - 400.0
 
 # Mediapipe bound info (values in pixels)

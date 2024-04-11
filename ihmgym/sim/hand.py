@@ -610,15 +610,9 @@ class Hand(Sim):
         link_lengths = self._link_lengths
         l_1, l_2, l_3 = link_lengths["finger1"]
         x_e, y_e, z_e = action[:, 0], action[:, 1], action[:, 2]
-        neg_indices = np.where(y_e < 0)[0]
-        neg = np.zeros_like(y_e)
-        neg[neg_indices] = -1
-
-
         l_prime = np.sqrt(x_e**2 + y_e**2 + (z_e - l_1)**2)
-        beta = np.arctan2(z_e - l_1, neg * neg * np.sqrt(x_e**2 + y_e**2))
+        beta = np.arctan2(z_e - l_1, np.sqrt(x_e**2 + y_e**2))
         alpha = np.arccos((l_2**2 + l_prime**2 - l_3**2)/(2*l_2*l_prime))
-
         a = l_prime * np.sin(alpha)
 
         theta2 = np.pi/2 - beta - alpha
@@ -626,10 +620,25 @@ class Hand(Sim):
 
         theta1 = np.arctan2(y_e, x_e) if roll else np.zeros_like(theta2)
 
+        ee_pos_cycle_check = self.compute_fk_hand(np.arctan2(y_e, x_e), theta2, theta3)
+        finger = 0
+        current_joint_pos = self.hand_joint_pos.reshape(5,3)
+        np.set_printoptions(suppress=True)
+        theta1_curr, theta2_curr, theta3_curr = current_joint_pos[:, 0], current_joint_pos[:, 1], current_joint_pos[:, 2]
+        # print("current pos", self.compute_fk_hand(theta1_curr, theta2_curr, theta3_curr)[finger])
         action = np.array([theta1, theta2, theta3]).T
         # collapse the from 5x3 to 15
         action = action.flatten()
         return action
+    
+    def compute_fk_hand(self, theta_1, theta_2, theta_3):
+        """ computes fk for the hand """
+        l1, l2, l3 = self._link_lengths["finger1"]
+        z_e = l1 + l2*np.cos(theta_2) + l3*np.cos(theta_2 + theta_3)
+        projected_len = l2*np.sin(theta_2) + l3*np.sin(theta_2 + theta_3)
+        x_e = projected_len*np.sin(theta_1)
+        y_e = projected_len*np.cos(theta_1)
+        return np.array([x_e, y_e, z_e]).T
 
     def compute_ik_arm(self, desired_ee_pose, current_arm_joint_pos):
         """ computes ik for the arm """
@@ -691,7 +700,6 @@ class Hand(Sim):
         finger_reach = l1 + l2 + l3 + plate_depth
         # wrist workspace
         if ee_pos[2] - finger_reach < half_table_height:
-            print(f"Clamping ee position from {ee_pos[2]} to {half_table_height + finger_reach}")
             ee_pos[2] = half_table_height + l1 + l2 + l3
             pose[:3, 3] = ee_pos
         return pose

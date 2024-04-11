@@ -58,7 +58,7 @@ class TeleOpSim(object):
             self.cfg = cfg
 
         self.table_height = 0.1
-        Kp = 5
+        Kp = 100
         kp_prox, kp_middle, kp_dist = np.array([Kp]*5), np.array([Kp]*5), np.array([Kp]*5)
         model_xml = Model3D5FH_UR5_PG.toxml(
             object="cube", 
@@ -335,6 +335,8 @@ class TeleOpSim(object):
                         }
 
                         wrist_position = xyz_pos_dict['wrist']
+                        joint_handlers.check_wrist_position(wrist_position, dict(self.cfg.wrist_bounds))
+
                         hand_state_dict = {
                             "wrist": wrist_position,
                             "fingertips": finger_tip_positions,
@@ -385,13 +387,18 @@ class TeleOpSim(object):
                             for i in range(5):
                                 norm_ftip_i = normalized_ftip_positions[i, :]
                                 action[i, :] = np.array(compute_action(norm_ftip_i, workspace_center, workspace_width))
+                            infer_y = True
                             
+                            if infer_y:
+                                action[:, 1] = compute_y_from_z(action[:, 2], l1, l2, l3)
+                                action[:, 0] = 0 # zero out x
+ 
                             wrist_position = np.array(
                                 compute_action(
                                     normalized_wrist_position, 
                                     self.arm_workspace_center, 
                                     self.arm_workspace_width,
-                                    invert_mask = [False, False, True] # invert x and z axes
+                                    invert_mask = [True, False, True] # invert x and z axes
                                 )
                             )
                             ee_rot = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, -1.0], [-1.0, 0.0, 0.0]]) # constant wrist orientation for now
@@ -410,7 +417,6 @@ class TeleOpSim(object):
                             }
                             # fetch current ur5 joint angles
                             obs, _, done, info = self.env.step(action_dict)
-                            
                         self.timestep += 1
 
                 # Printing the image

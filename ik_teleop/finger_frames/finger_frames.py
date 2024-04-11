@@ -129,3 +129,11 @@ def get_ftip_pos_finger_frame(finger_frames, finger_tip_positions, finger_base_p
     for finger in keys:
         ftip_pos_finger_frame[finger] = finger_frames[finger] @ ftip_base_vectors[finger]
     return ftip_pos_finger_frame
+
+
+def compute_y_from_z(z, l1, l2, l3):
+    """ Computes the y position given the z position and the lengths of the finger segments
+    because occlusion messes up y estimation"""
+    z = np.clip(z, l1, l1+l2+l3)
+    y = -z + l1 + l2 + l3
+    return y

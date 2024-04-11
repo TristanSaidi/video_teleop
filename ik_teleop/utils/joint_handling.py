@@ -3,6 +3,7 @@ import numpy as np
 
 # Image based imports
 import cv2
+from termcolor import cprint
 
 def get_joint_positions(hand_landmarks, resolution, mediapipe_structure, flip = False):
     # Getting the wrist joint position in X and Y pixels 
@@ -143,6 +144,36 @@ def compute_hand_landmarks_xyz(xy_pos_dict, depth, resolution):
         'pinky_tip': [pinky_tip_xy[0], pinky_tip_xy[1], pinky_tip_pos_z]
     }
     return xyz_pos_dict
+
+
+def check_wrist_position(wrist_position, wrist_bounds):
+    empirical_range_x, empirical_range_y, empirical_range_z = wrist_bounds['x'], wrist_bounds['y'], wrist_bounds['z']
+    # x
+    if wrist_position[0] >= empirical_range_x[1]:
+        print(' '*100, end='\r')
+        cprint('Move wrist to the left\r', 'red', attrs=['bold'], end="")
+    elif wrist_position[0] <= empirical_range_x[0]:
+        print(' '*100, end='\r')
+        cprint('Move wrist to the right\r', 'red', attrs=['bold'], end="")
+    # y
+    elif wrist_position[1] >= empirical_range_y[1]:
+        print(' '*100, end='\r')
+        cprint('Move wrist forward\r', 'red', attrs=['bold'], end="")
+    elif wrist_position[1] <= empirical_range_y[0]:
+        print(' '*100, end='\r')
+        cprint('Move wrist backward\r', 'red', attrs=['bold'], end="")
+    # z
+    elif wrist_position[2] >= empirical_range_z[1]:
+        print(' '*100, end='\r')
+        cprint('Move wrist up\r', 'red', attrs=['bold'], end="")
+    elif wrist_position[2] <= empirical_range_z[0]:
+        print(' '*100, end='\r')
+        cprint('Move wrist down\r', 'red', attrs=['bold'], end="")
+    else:
+        print(' '*100, end='\r')
+        cprint('Wrist position is good\r', 'green', attrs=['bold'], end="")
+
+    
 
 def check_hand_position(wrist_position, pinky_knuckle_position, wrist_joint_bound, pinky_knuckle_bound):
     # Checking if the pinky knuckle inside the pinky knuckle contour

@@ -199,20 +199,14 @@ class IHMEnv(gym.Env):
             dq = np.multiply(self.max_dq[0:len(action)], action)
         return dq * 0.5
 
-    def _compute_dq_cartesian_hand(self, pos, offset=False):
+    def _compute_dq_cartesian_hand(self, pos):
         """Compute joint setpoint delta (dq) for action (treated as cartesian coords of end-effector)"""
         current_joint_pos = self.sim.hand_joint_pos
         pos = self.sim.check_ik_pos_hand(pos)
         desired_joint_pos = self.sim.compute_ik_hand(pos, roll=False)
-        
-        if offset:
-            # add offset for middle and proximal joints
-            offset = np.zeros(15)
-            for i in range(5):
-                offset[i*3+1] = -0.3
-                offset[i*3+2] = -0.3
-            desired_joint_pos += offset
-
+        # clamp dq to be within join limits
+        hand_joint_ctrl_range_low, hand_joint_ctrl_range_high = self.sim._get_hand_joint_ctrl_range()
+        desired_joint_pos = np.clip(desired_joint_pos, hand_joint_ctrl_range_low, hand_joint_ctrl_range_high)
         action = desired_joint_pos - current_joint_pos
         if not self._discrete_action:
             if self.action_scaling_type == 'clip':
