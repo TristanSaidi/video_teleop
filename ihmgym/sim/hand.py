@@ -620,9 +620,10 @@ class Hand(Sim):
 
         theta1 = np.arctan2(y_e, x_e) if roll else np.zeros_like(theta2)
 
-        ee_pos_cycle_check = self.compute_fk_hand(np.arctan2(y_e, x_e), theta2, theta3)
-        finger = 0
-        current_joint_pos = self.hand_joint_pos.reshape(5,3)
+        # ee_pos_cycle_check = self.compute_fk_hand(np.arctan2(y_e, x_e), theta2, theta3)
+        # finger = 0
+
+        current_joint_pos = self.hand_joint_pos.reshape(-1,3)
         np.set_printoptions(suppress=True)
         theta1_curr, theta2_curr, theta3_curr = current_joint_pos[:, 0], current_joint_pos[:, 1], current_joint_pos[:, 2]
         # print("current pos", self.compute_fk_hand(theta1_curr, theta2_curr, theta3_curr)[finger])

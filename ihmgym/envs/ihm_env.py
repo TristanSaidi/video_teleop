@@ -27,6 +27,7 @@ class IHMEnv(gym.Env):
         discrete_action: bool = False,
         discretization_steps: int = 5,
         randomize_initial_state: bool = False,
+        num_fingers: int = 5,
     ):
 
         """
@@ -68,14 +69,16 @@ class IHMEnv(gym.Env):
         if isinstance(max_dq, float):
             self.max_dq = max_dq * np.ones(self.action_dim)
         elif isinstance(max_dq, np.ndarray):
-            assert (
-                max_dq.shape[0] == self.action_dim
-            ), "length of max_dq \
-                 must equal action_dim"
+            # assert (
+            #     max_dq.shape[0] == self.action_dim
+            # ), "length of max_dq \
+            #      must equal action_dim"
             self.max_dq = max_dq.reshape(-1)
         else:
             raise ValueError("Invalid type specified for max_dq")
         self.action_scaling_type = action_scaling_type
+
+        self.num_fingers = num_fingers
 
         self._randomize_initial_state = randomize_initial_state
         logger.info("Creating a copy of simulation for initial state sampler..")
@@ -139,7 +142,7 @@ class IHMEnv(gym.Env):
         hand_action = action_dict["hand"]
         arm_action = action_dict["arm"]
         # parse hand action - expects cartesian coordinates of fingertips
-        assert hand_action.shape == (5, 3), "Cartesian action for hand must be of shape (5, 3)"
+        assert hand_action.shape == (self.num_fingers, 3), f"Cartesian action for hand must be of shape ({self.num_fingers}, 3)"
         assert arm_action.shape == (4, 4), "Action for arm must be of shape (4, 4)"
         dq_hand = self._compute_dq_cartesian_hand(hand_action)
         dq_arm = self._compute_dq_cartesian_arm(arm_action)
@@ -196,7 +199,7 @@ class IHMEnv(gym.Env):
             elif self.action_scaling_type == 'scale':
                 if np.abs(action).max() > 1:
                     action = action / np.abs(action).max()
-            dq = np.multiply(self.max_dq[0:len(action)], action)
+            dq = np.multiply(self.max_dq[-len(action):], action)
         return dq * 0.5
 
     def _compute_dq_cartesian_hand(self, pos):
@@ -217,7 +220,10 @@ class IHMEnv(gym.Env):
             elif self.action_scaling_type == 'scale':
                 if np.abs(action).max() > 1:
                     action = action / np.abs(action).max()
-            dq = np.multiply(self.max_dq, action)
+            if isinstance(self.max_dq, float):
+                dq = np.multiply(self.max_dq, action)
+            else:
+                dq = np.multiply(self.max_dq[0:len(action)], action)
         else:
             dq = np.array(
                 [

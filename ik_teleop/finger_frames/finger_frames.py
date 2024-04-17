@@ -137,3 +137,14 @@ def compute_y_from_z(z, l1, l2, l3):
     z = np.clip(z, l1, l1+l2+l3)
     y = -z + l1 + l2 + l3
     return y
+
+def infer_yaw_roll(hand_state_dict):
+    # wrist --> thumb vector
+    pinky_to_thumb = np.array(hand_state_dict['finger_bases']['pinky']) - np.array(hand_state_dict['wrist'])
+    # project onto xy plane
+    roll = np.arctan2(pinky_to_thumb[2], -1 * pinky_to_thumb[0])
+    if roll < -1.0: roll *= -1 # prevents strange wraparound
+    roll = np.clip(roll, -np.pi/4, np.pi/4)
+    yaw = np.arctan2(-1 * pinky_to_thumb[1], pinky_to_thumb[2]) - np.pi/2
+    yaw = np.clip(yaw, -np.pi/4, np.pi/4)
+    return yaw, roll

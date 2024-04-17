@@ -10,6 +10,7 @@ sys.path.append(IKFP_ROOT)
 from envs.ihm_env import IHMEnv
 from model.model3d5fh import Model3D5FH
 from model.model3d5fh_ur5e import Model3D5FH_UR5_PG
+from model.model3d4fh_ur5e import Model3D4FH_UR5_PG
 
 from sim.hand import Hand
 from finger_frames.finger_frames import *
@@ -46,7 +47,7 @@ from IPython import embed
 from ikpy import chain
 
 class TeleOpSim(object):
-    def __init__(self, record_demo, hide_window, cfg = None, rotation_angle = 0, enable_moving_average = True, cache_file = None, calibration_duration = 100):
+    def __init__(self, record_demo, hide_window, cfg = None, num_fingers=4, rotation_angle = 0, enable_moving_average = True, cache_file = None, calibration_duration = 100):
         self.record_demo = record_demo
         self.display_window= not hide_window
 
@@ -59,8 +60,13 @@ class TeleOpSim(object):
 
         self.table_height = 0.1
         Kp = 100
-        kp_prox, kp_middle, kp_dist = np.array([Kp]*5), np.array([Kp]*5), np.array([Kp]*5)
-        model_xml = Model3D5FH_UR5_PG.toxml(
+
+        self.num_fingers = num_fingers
+        kp_prox, kp_middle, kp_dist = np.array([Kp]*self.num_fingers), np.array([Kp]*self.num_fingers), np.array([Kp]*self.num_fingers)
+        
+        model_class = Model3D5FH_UR5_PG if self.num_fingers == 5 else Model3D4FH_UR5_PG
+        
+        model_xml = model_class.toxml(
             object="cube", 
             table_height=self.table_height,
             kp_prox=kp_prox,
@@ -72,9 +78,9 @@ class TeleOpSim(object):
         self.ee_chain.active_links_mask[0] = False # base_link
         self.ee_chain.active_links_mask[-1] = False # ee_link
 
-        self.default_hand_joint_pos = np.array([0, 0.0, 0.0] * 5)
-        self.default_arm_joint_pos = np.array([-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0.0])
-
+        self.default_hand_joint_pos = np.array([0, 0.0, 0.0] * self.num_fingers)
+        self.default_arm_joint_pos = np.array([-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, -1.5708])
+        self.default_ee_rot = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
         # print forward kinematics of default arm joint pos
         ee_pose = self.ee_chain.forward_kinematics(np.pad(self.default_arm_joint_pos, (1, 1), 'constant', constant_values=(0, 0)))
 
@@ -94,12 +100,18 @@ class TeleOpSim(object):
             default_arm_joint_pos=self.default_arm_joint_pos,
             default_object_pose=self.default_object_pose,
         )
+        
+        max_dq_hand = [0.05] * self.num_fingers * 3
+        max_dq_arm = [0.1] * 6
+        max_dq = np.array(max_dq_hand + max_dq_arm)
+        
         self.env = IHMEnv(
             sim=self.sim,
             max_episode_length=500,
-            max_dq=0.05,
+            max_dq=max_dq,
             discrete_action=False,
             randomize_initial_state=False,
+            num_fingers=self.num_fingers,
         )
         
         self.viewer = self.env.sim._get_viewer("human")
@@ -234,7 +246,7 @@ class TeleOpSim(object):
 
             # initialize action
             l1, l2, l3 = self.sim.get_link_lengths('finger1')
-            action = np.array([[0, 0, (l1+l2+l3)]]*5)
+            action = np.array([[0, 0, (l1+l2+l3)]]*self.num_fingers)
 
             # for calibration
             fingertip_pos_history = [] 
@@ -380,11 +392,11 @@ class TeleOpSim(object):
                             normalized_ftip_positions = np.array(normalized_ftip_positions)
                             normalized_wrist_position = compute_normalized_position(wrist_position, dict(self.cfg.wrist_bounds))
                             # compute action
-                            action = np.zeros((5, 3))
+                            action = np.zeros((self.num_fingers, 3))
                             workspace_center = [0.0, 0.0, l1 + (l2 + l3)/2] # y goes from 0 to l2+l3
                             workspace_width = [l2+l3, (l2+l3)/2, (l2+l3)/2]
                             
-                            for i in range(5):
+                            for i in range(self.num_fingers):
                                 norm_ftip_i = normalized_ftip_positions[i, :]
                                 action[i, :] = np.array(compute_action(norm_ftip_i, workspace_center, workspace_width))
                             infer_y = True
@@ -401,8 +413,15 @@ class TeleOpSim(object):
                                     invert_mask = [True, False, True] # invert x and z axes
                                 )
                             )
-                            ee_rot = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, -1.0], [-1.0, 0.0, 0.0]]) # constant wrist orientation for now
 
+                            # infer roll
+                            yaw, roll = infer_yaw_roll(hand_state_dict)
+
+                            ee_rot = self.default_ee_rot # constant wrist orientation for now
+                            # apply roll
+                            # ee_rot = np.dot(np.array([[np.cos(roll), 0, np.sin(roll)], [0, 1, 0], [-np.sin(roll), 0, np.cos(roll)]]), ee_rot)
+                            # apply yaw
+                            # ee_rot = np.dot(np.array([[1, 0, 0], [0, np.cos(yaw), -np.sin(yaw)], [0, np.sin(yaw), np.cos(yaw)]]), ee_rot)
                             # clamp wrist position to workspace
                             wrist_position = np.clip(wrist_position, self.arm_workspace_center - self.arm_workspace_width, self.arm_workspace_center + self.arm_workspace_width)
 
@@ -413,7 +432,7 @@ class TeleOpSim(object):
                             # step
                             action_dict = {
                                 "hand": action,
-                                "arm": desired_ee_pose
+                                "arm": desired_ee_pose,
                             }
                             # fetch current ur5 joint angles
                             obs, _, done, info = self.env.step(action_dict)
@@ -440,10 +459,11 @@ if __name__ == '__main__':
     parser.add_argument('--record', action='store_true', default=False)
     parser.add_argument('--headless', type=bool, default=False)
     parser.add_argument('--cache_file', default=None)
+    parser.add_argument('--num_fingers', default=4, type=int)
     parser.add_argument('--calibration_duration', default=100, type=int)
     args = parser.parse_args()
 
-    teleop = TeleOpSim(args.record, args.headless, rotation_angle = 0, cache_file = args.cache_file, calibration_duration = args.calibration_duration)
+    teleop = TeleOpSim(args.record, args.headless, num_fingers=args.num_fingers, rotation_angle = 0, cache_file = args.cache_file, calibration_duration = args.calibration_duration)
     # embed()
     try:
         teleop.hand_movement_processor()
